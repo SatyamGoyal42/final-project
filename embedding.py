@@ -3,6 +3,7 @@ import cv2
 import itertools
 import random
 
+#block division into 2x2 blocks
 def divide_blocks(image, block_size=(2, 2)):
     M, N = image.shape
     blocks = []
@@ -13,16 +14,19 @@ def divide_blocks(image, block_size=(2, 2)):
                 blocks.append((block, (i, j)))
     return blocks
 
+#block regulation using a difference value "d"
 def regulate(block, d):
     V = block.flatten()
     R = np.array([0, d, 2*d, 3*d])
     A = V + R
     return A
 
+#check if the block is monotonic in increasing order
 def is_monotonic(A):
     return np.all(np.diff(A) > 0) or np.all(np.diff(A) < 0)
 
-def create_location_map(blocks, d):
+#location map function
+def create_lmap(blocks, d):
     location_map = []
     regulated_blocks = {}
     for idx, (block, pos) in enumerate(blocks):
@@ -33,7 +37,8 @@ def create_location_map(blocks, d):
             location_map.append(pos)
     return regulated_blocks, location_map
 
-def embed_secret_data(blocks, secret_bits):
+#embedding secret data into the blocks
+def embed(blocks, secret_bits):
     permuted_blocks = {}
     bit_index = 0
     for pos, A in blocks.items():
@@ -51,7 +56,8 @@ def embed_secret_data(blocks, secret_bits):
             permuted_blocks[pos] = A.reshape((2,2))
     return permuted_blocks
 
-def adaptive_permutation_table(image, alpha=7, beta=13):
+#genrating permutation table
+def permutation_table(image, alpha=7, beta=13):
     M, N = image.shape
     hash_values = np.zeros((M//2, N//2))
     for i in range(0, M, 2):
@@ -61,12 +67,12 @@ def adaptive_permutation_table(image, alpha=7, beta=13):
             h = (alpha * mean_val + beta) % 255
             hash_values[i//2, j//2] = h
     return hash_values
-
+#mainnfunction where all the functions are called
 def process_image(image_path, d, secret_bits):
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     blocks = divide_blocks(image)
-    regulated_blocks, location_map = create_location_map(blocks, d)
-    permuted_blocks = embed_secret_data(regulated_blocks, secret_bits)
-    perm_table = adaptive_permutation_table(image)
+    regulated_blocks, location_map = create_lmap(blocks, d)
+    permuted_blocks = embed(regulated_blocks, secret_bits)
+    perm_table = permutation_table(image)
     return permuted_blocks, location_map, perm_table
 
