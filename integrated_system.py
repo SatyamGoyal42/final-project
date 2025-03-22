@@ -1,6 +1,9 @@
 import numpy as np
 import cv2
 import itertools
+from skimage.metrics import structural_similarity as ssim
+import math
+
 
 # Encryption Functions
 def divide_into_blocks(image, M=2, N=2):
@@ -173,14 +176,31 @@ def decrypt_and_extract(embedded_image, encryption_key, block_size_encryption=(2
     
     return decrypted_image, extracted_message
 
-# Extended example usage
-def example_usage():
-    # Example parameters
+# PSNR and SSIM and EC
+def calculate_psnr(original, decrypted):
+    mse = np.mean((original - decrypted) ** 2)
+    if mse == 0:
+        return float('inf')  # No difference
+    max_pixel = 255.0
+    psnr = 20 * math.log10(max_pixel / math.sqrt(mse))
+    return psnr
+
+def calculate_ssim(original, decrypted):
+    score, _ = ssim(original, decrypted, full=True)
+    return score
+
+def calculate_ec(image, secret_bits):
+    total_pixels = image.shape[0] * image.shape[1]
+    num_embedded_bits = len(secret_bits)
+    ec = num_embedded_bits / total_pixels
+    return ec, num_embedded_bits
+
+def example():
+
     image_path = "images/Baboon_Gray.png"
     encryption_key = 42
     d = 3
-    # Example secret bits (binary data to embed)
-    secret_bits = [1, 0, 1, 1, 0, 0, 1, 0]
+    secret_bits = [1, 0, 1, 1, 0, 1, 0, 1, 1, 0]*10000
     
     # Encrypt and embed
     result_image, encryption_indices, location_map = encrypt_and_embed(
@@ -191,7 +211,7 @@ def example_usage():
     )
     
     # Save the encrypted and embedded image
-    output_path = "result_baboon.png"
+    output_path = "final.png"
     cv2.imwrite(output_path, result_image)
     
     print("Encryption and Embedding:")
@@ -211,20 +231,30 @@ def example_usage():
     )
     
     # Save the decrypted image
-    decrypted_path = "decrypted_baboon.png"
+    decrypted_path = "decrypted.png"
     cv2.imwrite(decrypted_path, decrypted_image)
     
     print("\nDecryption and Extraction:")
     print(f"Decrypted image saved as: {decrypted_path}")
-    print("Original message:", secret_bits)
-    print("Extracted message:", extracted_message[:len(secret_bits)])
+    #print("Original message:", secret_bits)
+    #print("Extracted message:", extracted_message[:len(secret_bits)])
+    original_image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     
-    # Verify the results
+    # Verification
     print("\nVerification:")
     print("Message successfully extracted:", secret_bits == extracted_message[:len(secret_bits)])
-    original_image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    decryption_successful = np.array_equal(original_image, decrypted_image)
-    print("Image successfully decrypted:", decryption_successful)
+
+    # Calculate EC,PSNR and SSIM
+    ec,l = calculate_ec(result_image, secret_bits)
+    psnr_value = calculate_psnr(original_image, decrypted_image)
+    ssim_value = calculate_ssim(original_image, decrypted_image)
+
+    print(f"EC: {l}")
+    print(f"EC(bpp): {ec:.4f} bpp")
+    print(f"PSNR: {psnr_value:.2f} dB")
+    print(f"SSIM: {ssim_value:.4f}")
+    # decryption_successful = np.array_equal(original_image, decrypted_image)
+   # print("Image successfully decrypted:", decryption_successful)
 
 if __name__ == "__main__":
-    example_usage() 
+    example() 
