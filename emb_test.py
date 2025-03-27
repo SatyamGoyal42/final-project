@@ -4,17 +4,6 @@ import itertools
 from skimage.metrics import structural_similarity as ssim
 import math
 
-
-# Encryption Functions
-def divide_into_blocks(image, M=2, N=2):
-    h, w = image.shape
-    blocks = []
-    for i in range(0, h, M):
-        for j in range(0, w, N):
-            block = image[i:i+M, j:j+N]
-            blocks.append(block)
-    return blocks, h, w
-
 def reconstruct_image(blocks, h, w, M=2, N=2):
     r = np.zeros((h, w), dtype=np.uint8)
     index = 0
@@ -23,24 +12,6 @@ def reconstruct_image(blocks, h, w, M=2, N=2):
             r[i:i+M, j:j+N] = blocks[index]
             index += 1
     return r
-
-def scramble_pixels(block, key):
-    np.random.seed(key)
-    flat_block = block.reshape(-1)
-    indices = np.arange(len(flat_block))
-    np.random.shuffle(indices)
-    scrambled_block = flat_block[indices].reshape(block.shape)
-    return scrambled_block, indices
-
-def scramble_blocks(blocks, key):
-    np.random.seed(key)
-    indices = np.arange(len(blocks))
-    np.random.shuffle(indices)
-    scrambled = [blocks[i] for i in indices]
-    scrambled = [scramble_pixels(block, key)[0] for block in scrambled]
-    return scrambled, indices
-
-# Embedding Functions
 def divide_blocks_for_embedding(image):
     M, N = image.shape
     blocks = []
@@ -92,46 +63,24 @@ def embed(blocks, secret_bits):
             permuted_blocks[pos] = A.reshape((2,2))
     return permuted_blocks
 
-def encrypt_and_embed(image_path, encryption_key, block_size_encryption=(2, 2), d=3, secret_bits=None):
+def embed_final(image_path, d=3, secret_bits=None):
     
     if secret_bits is None:
         secret_bits = []
-        
-    # Read and encrypt the image
+            
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    blocks, h, w = divide_into_blocks(image)
-    scrambled_blocks, indices = scramble_blocks(blocks, encryption_key)
-    encrypted_image = reconstruct_image(scrambled_blocks, h, w) #this is the encrypted image
-    
-    # Embed data in encrypted image
-    embedding_blocks = divide_blocks_for_embedding(encrypted_image)
+    # Embed data 
+    embedding_blocks = divide_blocks_for_embedding(image)
     regulated_blocks, location_map = create_lmap(embedding_blocks, d)
     final_blocks = embed(regulated_blocks, secret_bits)
     
     # Reconstruct final image with embedded data
-    result_image = encrypted_image.copy()
+    embedded_image = image.copy()
     for pos, block in final_blocks.items():
         i, j = pos
-        result_image[i:i+2, j:j+2] = block #this is the final image with embedded data
+        embedded_image[i:i+2, j:j+2] = block #this is the final image with embedded data
     
-    return result_image, indices, location_map
-
-# Decryption and Extraction Functions
-def unscramble_pixels(block, indices):
-    flat_block = block.reshape(-1)
-    unscrambled = np.zeros_like(flat_block)
-    unscrambled[indices] = flat_block
-    return unscrambled.reshape(block.shape)
-
-def unscramble_blocks(blocks, block_indices, pixel_indices_key):
-
-    blocks = [unscramble_pixels(block, np.random.RandomState(pixel_indices_key).permutation(block.size)) 
-             for block in blocks]
-    
-    original_blocks = [None] * len(blocks)
-    for new_pos, original_pos in enumerate(block_indices):
-        original_blocks[original_pos] = blocks[new_pos]
-    return original_blocks
+    return embedded_image, location_map
 
 def de_embed(embedded_image, d, location_map):
 
@@ -141,10 +90,11 @@ def de_embed(embedded_image, d, location_map):
     for block, pos in blocks:
         if pos not in location_map:  # Process only embedded blocks
             A = block.flatten()
-            A_sorted = sorted(A)
+            sorted_block = np.sort(A)
             
+            # ✅ Subtract the arithmetic progression
             R = np.array([0, d, 2 * d, 3 * d])
-            de_embedded_block = A_sorted - R
+            de_embedded_block = sorted_block - R
             
             # Ensure pixel values are clamped between 0-255
             de_embedded_block = np.clip(de_embedded_block, 0, 255).reshape((2, 2))
@@ -163,7 +113,7 @@ def de_embed(embedded_image, d, location_map):
 
     return de_embedded_image
 
-def extract_message(embedded_image, d, location_map):
+def extract_message(embedded_image, location_map):
     
     extracted_bits = []
     blocks = divide_blocks_for_embedding(embedded_image)
@@ -185,31 +135,18 @@ def extract_message(embedded_image, d, location_map):
     
     return extracted_bits
 
-def decrypt_and_extract(embedded_image, encryption_key, block_size_encryption=(2, 2), 
-                       block_indices=None, d=3, location_map=None):
+def extract(embedded_image, d=3, location_map=None):
    
     if location_map is None:
         location_map = []
-    if block_indices is None:
-        block_indices = []
         
     # First extract the message before decryption
-    extracted_message = extract_message(embedded_image, d, location_map)
+    extracted_message = extract_message(embedded_image, location_map)
     de_embedded_image = de_embed(embedded_image, d, location_map)
     
-    # Then decrypt the image
-    h, w = de_embedded_image.shape
-    blocks, _, _ = divide_into_blocks(de_embedded_image)
-    
-    # Unscramble the blocks and pixels
-    original_blocks = unscramble_blocks(blocks, block_indices, encryption_key)
-    
-    # Reconstruct the original image
-    decrypted_image = reconstruct_image(original_blocks, h, w)
 
-    return decrypted_image, extracted_message , de_embedded_image
+    return  extracted_message , de_embedded_image
 
-# PSNR and SSIM and EC
 def calculate_psnr(original, decrypted):
     mse = np.mean((original - decrypted) ** 2)
     if mse == 0:
@@ -222,58 +159,37 @@ def calculate_ssim(original, decrypted):
     score, _ = ssim(original, decrypted, full=True)
     return score
 
-def calculate_ec(image, secret_bits):
-    total_pixels = image.shape[0] * image.shape[1]
-    num_embedded_bits = len(secret_bits)
-    ec = num_embedded_bits / total_pixels
-    return ec, num_embedded_bits
-
 def example():
 
     image_path = "images/Baboon_Gray.png"
-    encryption_key = 42
     d = 3
     secret_bits = []
     
     # Encrypt and embed
-    result_image, encryption_indices, location_map = encrypt_and_embed(
-        image_path, 
-        encryption_key, 
+    embedded_image, location_map = embed_final(
+        image_path,  
         d=d, 
         secret_bits=secret_bits
     )
     
     # Save the encrypted and embedded image
-    output_path = "final.png"
-    cv2.imwrite(output_path, result_image)
-    
-    print("Encryption and Embedding:")
-    print(f"Original image: {image_path}")
-    print(f"Result saved as: {output_path}")
-    # print("Encryption indices:", encryption_indices)
-    # print("Location map:", location_map)
-    print(f"Number of blocks in location map: {len(location_map)}")
-    
+    output_path = "emb_test.png"
+    cv2.imwrite(output_path, embedded_image)
+        
     # Decrypt and extract
-    decrypted_image, extracted_message,de_embedded_image = decrypt_and_extract(
-        result_image,
-        encryption_key,
-        block_indices=encryption_indices,
+    print("running1")
+    extracted_message,decrypted_image = extract(
+        embedded_image,
         d=d,
         location_map=location_map
     )
     
     # Save the decrypted image
-    decrypted_path = "decrypted.png"
+    print("running2")
+    decrypted_path = "de_emd_test.png"
     cv2.imwrite(decrypted_path, decrypted_image)
-
-    de_embedded_path = "de_embedded.png"
-    cv2.imwrite(de_embedded_path, de_embedded_image)
     
-    print("\nDecryption and Extraction:")
-    print(f"Decrypted image saved as: {decrypted_path}")
-    print("Original message:", secret_bits)
-    print("Extracted message:", extracted_message[:len(secret_bits)])
+    
     original_image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     
     # Verification
@@ -281,16 +197,14 @@ def example():
     print("Message successfully extracted:", secret_bits == extracted_message[:len(secret_bits)])
 
     # Calculate EC,PSNR and SSIM
-    ec,l = calculate_ec(result_image, secret_bits)
     psnr_value = calculate_psnr(original_image, decrypted_image)
     ssim_value = calculate_ssim(original_image, decrypted_image)
 
-    print(f"Data size: {l}")
-    print(f"EC(bpp): {ec:.4f} bpp")
+    
     print(f"PSNR: {psnr_value:.2f} dB")
     print(f"SSIM: {ssim_value:.4f}")
-    # decryption_successful = np.array_equal(original_image, decrypted_image)
-   # print("Image successfully decrypted:", decryption_successful)
+    decryption_successful = np.array_equal(original_image, decrypted_image)
+    print("Image successfully decrypted:", decryption_successful)
 
 if __name__ == "__main__":
     example() 
